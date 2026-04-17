@@ -16,6 +16,9 @@ Deploy from `backend/` directory with these files:
 - Environment variable:
   - `ALLOWED_ORIGINS=https://<your-vercel-domain>`
 
+If Railway root directory is set wrong, this repo also includes a root `Dockerfile`
+that builds and runs `backend/` directly.
+
 After deploy, copy backend URL like:
 - `https://your-backend.up.railway.app`
 
