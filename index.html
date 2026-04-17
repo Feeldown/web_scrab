@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="th">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Medicine UI</title>
+
+    <link href="https://fonts.googleapis.com/css2?family=Kanit:wght@300;400;500&display=swap" rel="stylesheet">
+
+    <style>
+        :root {
+            --bg: #fafafa;
+            --card: #ffffff;
+            --text: #1f2937;
+            --muted: #6b7280;
+            --border: #e5e7eb;
+            --shadow: 0 10px 28px rgba(0, 0, 0, 0.06);
+            --accent: #3b82f6;
+            --accent-soft: rgba(59, 130, 246, 0.14);
+        }
+
+        * { box-sizing: border-box; }
+
+        body {
+            font-family: 'Kanit', sans-serif;
+            background: var(--bg);
+            margin: 0;
+            color: var(--text);
+        }
+
+        .container {
+            max-width: 700px;
+            margin: auto;
+            padding: 32px 16px;
+        }
+
+        .title {
+            font-size: clamp(20px, 4vw, 26px);
+            font-weight: 500;
+        }
+
+        .sub {
+            color: var(--muted);
+            font-size: 14px;
+            margin-bottom: 20px;
+        }
+
+        .search-wrap {
+            display: flex;
+            gap: 6px;
+            background: var(--card);
+            padding: 6px;
+            border-radius: 18px;
+            border: 1px solid var(--border);
+            box-shadow: var(--shadow);
+        }
+
+        .search-wrap input {
+            flex: 1;
+            border: none;
+            padding: 10px;
+            font-size: 14px;
+            outline: none;
+            background: transparent;
+        }
+
+        .search-btn {
+            width: 40px;
+            height: 40px;
+            border: none;
+            border-radius: 12px;
+            background: var(--accent-soft);
+            cursor: pointer;
+            font-size: 16px;
+        }
+
+        .section {
+            margin-top: 24px;
+            font-size: 13px;
+            color: var(--muted);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .section::after {
+            content: '';
+            height: 1px;
+            background: var(--border);
+            flex: 1;
+        }
+
+        .card {
+            background: var(--card);
+            border-radius: 16px;
+            padding: 14px;
+            margin-top: 10px;
+            border: 1px solid var(--border);
+            cursor: pointer;
+            transition: .25s;
+            animation: fadeIn 0.3s ease-out;
+        }
+
+        .card:hover {
+            transform: translateY(-3px);
+            box-shadow: var(--shadow);
+        }
+
+        .drug {
+            font-size: 15px;
+            font-weight: 500;
+        }
+
+        .meta {
+            font-size: 12px;
+            color: var(--muted);
+        }
+
+        .chip {
+            display: inline-block;
+            padding: 4px 10px;
+            background: rgba(0, 0, 0, 0.05);
+            border-radius: 10px;
+            font-size: 11px;
+            margin-top: 6px;
+        }
+
+        .loading,
+        .empty {
+            padding: 20px;
+            color: var(--muted);
+        }
+
+        .modal {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.45);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            padding: 10px;
+        }
+
+        .modal.show {
+            display: flex;
+        }
+
+        .modal-content {
+            background: white;
+            width: 100%;
+            max-width: 600px;
+            max-height: 85vh;
+            overflow-y: auto;
+            border-radius: 16px;
+            padding: 18px;
+            animation: fadeIn .25s ease;
+            line-height: 1.7;
+        }
+
+        .modal-close {
+            float: right;
+            cursor: pointer;
+            font-size: 18px;
+            color: var(--muted);
+        }
+
+        ul {
+            list-style: "– ";
+            padding-left: 16px;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        @media (max-width: 480px) {
+            .container { padding: 20px 12px; }
+            .modal-content { padding: 14px; }
+        }
+
+    </style>
+</head>
+
+<body>
+
+<div class="container">
+
+    <div class="title">💊 Medicine Finder</div>
+    <div class="sub">ค้นหาข้อมูลยาแบบน่ารัก ๆ</div>
+
+    <div class="search-wrap">
+        <input id="q" placeholder="ค้นหายา เช่น paracetamol">
+        <button class="search-btn" onclick="uploadImage()">📷</button>
+        <button class="search-btn" onclick="search()">🔍</button>
+    </div>
+
+    <input type="file" id="imgInput" hidden accept="image/*">
+
+    <div class="section">Results</div>
+
+    <div id="results">
+        <div class="empty">ลองพิมพ์ค้นหาดู 👀</div>
+    </div>
+
+</div>
+
+<div class="modal" id="modal">
+    <div class="modal-content">
+        <div class="modal-close" onclick="closeModal()">✕</div>
+        <div id="modalBody"></div>
+    </div>
+</div>
+
+<script>
+
+    const API = "http://127.0.0.1:8000"
+    const qEl = document.getElementById("q")
+    const box = document.getElementById("results")
+    
+    /* ======================
+       🔥 OCR CLEAN + EXTRACT
+    ====================== */
+    
+    function cleanOCRText(text) {
+    
+        text = text.toLowerCase()
+    
+        // 🔥 แก้ OCR เพี้ยน
+        text = text.replace(/0/g, "o")
+        text = text.replace(/mq/g, "mg")
+        text = text.replace(/rn/g, "m")
+    
+        // 🔥 เอาเฉพาะคำสำคัญ
+        let tokens = text.match(/[a-z]+|\d+\s?(mg|ml|g)/g)
+    
+        if (!tokens) return text
+    
+        return tokens.join(" ")
+    }
+    
+    const KNOWN_DRUGS = [
+        "paracetamol",
+        "ibuprofen",
+        "amoxicillin",
+        "cetirizine",
+        "loratadine"
+    ]
+    
+    function extractDrugName(text) {
+    
+        let best = ""
+        let bestScore = 0
+    
+        KNOWN_DRUGS.forEach(drug => {
+            let score = similarity(text, drug)
+            if (score > bestScore) {
+                bestScore = score
+                best = drug
+            }
+        })
+    
+        return bestScore > 0.5 ? best : text
+    }
+    
+    function similarity(a, b) {
+        let longer = a.length > b.length ? a : b
+        let shorter = a.length > b.length ? b : a
+    
+        let same = 0
+        for (let i = 0; i < shorter.length; i++) {
+            if (longer.includes(shorter[i])) same++
+        }
+    
+        return same / longer.length
+    }
+    
+    /* ======================
+       UI + SEARCH (ของเดิม)
+    ====================== */
+    
+    function formatValue(value) {
+        let text = String(value).trim()
+    
+        if (text.includes("*")) {
+            let items = text.split("*").map(i => i.trim()).filter(i => i)
+            return `<ul>${items.map(i => `<li>${i}</li>`).join("")}</ul>`
+        }
+    
+        return `<div>${text}</div>`
+    }
+    
+    async function search() {
+    
+        let q = qEl.value.trim()
+    
+        if (!q) {
+            box.innerHTML = '<div class="empty">ลองพิมพ์ค้นหาดู 👀</div>'
+            return
+        }
+    
+        box.innerHTML = '<div class="loading">searching...</div>'
+    
+        try {
+            let res = await fetch(API + "/search", {
+                method: "POST",
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ query: q })
+            })
+    
+            let data = await res.json()
+    
+            if (data.status === "not_found") {
+                box.innerHTML = '<div class="empty">ไม่เจอ 😢</div>'
+                return
+            }
+    
+            render(data.results)
+    
+        } catch {
+            box.innerHTML = '<div class="empty">API ยังไม่รัน</div>'
+        }
+    }
+    
+    function render(list) {
+    
+        box.innerHTML = ""
+    
+        list.forEach(r => {
+    
+            let d = r.data
+    
+            let card = document.createElement("div")
+            card.className = "card"
+    
+            card.innerHTML = `
+                <div class="drug">${d.generic_name || '-'}</div>
+                <div class="meta">${d.form || ''} • ${d.strength || ''}</div>
+                <div class="chip">${Math.round(r.score * 100)}%</div>
+            `
+    
+            card.onclick = () => openModal(r)
+    
+            box.appendChild(card)
+        })
+    }
+    
+    function openModal(r) {
+    
+        let d = r.data
+        let fd = d.full_data || {}
+    
+        let entries = Object.entries(fd)
+            .filter(([k, v]) => v && String(v).trim() !== "")
+    
+        let detailHTML = entries.map(([key, value]) => `
+            <div style="margin-top:14px;">
+                <div style="font-weight:500;">${key}</div>
+                <div>${formatValue(value)}</div>
+            </div>
+        `).join("")
+    
+        document.getElementById("modalBody").innerHTML = `
+            <h2>${d.generic_name || '-'}</h2>
+            <div class="meta">${d.form || ''} • ${d.strength || ''}</div>
+            <br>
+            ${detailHTML || 'ไม่มีข้อมูล'}
+        `
+    
+        document.getElementById("modal").classList.add("show")
+    }
+    
+    function closeModal() {
+        document.getElementById("modal").classList.remove("show")
+    }
+    
+    /* ======================
+       🔥 OCR UPLOAD (แก้แล้ว)
+    ====================== */
+    
+    function uploadImage() {
+        document.getElementById("imgInput").click()
+    }
+    
+    document.getElementById("imgInput").addEventListener("change", async (e) => {
+    
+        let file = e.target.files[0]
+        if (!file) return
+    
+        let formData = new FormData()
+        formData.append("file", file)
+    
+        box.innerHTML = '<div class="loading">อ่านรูป...</div>'
+    
+        try {
+            let res = await fetch(API + "/ocr-search", {
+                method: "POST",
+                body: formData
+            })
+    
+            let data = await res.json()
+    
+            if (data.ocr_text) {
+    
+                // 🔥 STEP 1: clean OCR
+                let cleaned = cleanOCRText(data.ocr_text)
+    
+                // 🔥 STEP 2: extract drug
+                let finalQuery = extractDrugName(cleaned)
+    
+                console.log("RAW:", data.ocr_text)
+                console.log("CLEAN:", cleaned)
+                console.log("FINAL:", finalQuery)
+    
+                qEl.value = finalQuery
+                search()
+    
+            } else {
+                box.innerHTML = '<div class="empty">อ่านรูปไม่ออก 😢</div>'
+            }
+    
+        } catch {
+            box.innerHTML = '<div class="empty">OCR API error</div>'
+        }
+    
+    })
+    
+    </script>
+
+</body>
+</html>
