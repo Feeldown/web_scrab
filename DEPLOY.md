@@ -2,15 +2,16 @@
 
 ## 1) Backend (Railway)
 
-Deploy from repository root with these files:
-- `main.py`
-- `search_engine.py`
-- `cleaned_medicine.json`
-- `requirements.txt`
-- `Procfile`
-- `nixpacks.toml`
+Deploy from `backend/` directory with these files:
+- `backend/main.py`
+- `backend/search_engine.py`
+- `backend/cleaned_medicine.json`
+- `backend/requirements.txt`
+- `backend/Procfile`
+- `backend/nixpacks.toml`
 
 ### Railway settings
+- Root directory: `backend`
 - Start command: `uvicorn main:app --host 0.0.0.0 --port $PORT`
 - Environment variable:
   - `ALLOWED_ORIGINS=https://<your-vercel-domain>`
@@ -23,11 +24,12 @@ Health check:
 
 ## 2) Frontend (Vercel)
 
-Deploy repository root as a static site.
+Deploy `frontend/` as a static site.
 
 Important:
-- Ensure `index.html` is included.
-- `vercel.json` is already configured for SPA-style rewrite.
+- Root directory: `frontend`
+- Ensure `frontend/index.html` is included.
+- `frontend/vercel.json` is already configured for SPA-style rewrite.
 
 ### Set API endpoint
 Open browser devtools console on your frontend and run:
