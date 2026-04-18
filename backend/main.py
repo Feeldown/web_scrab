@@ -192,7 +192,7 @@ def preprocess_image(img: np.ndarray) -> np.ndarray:
         scale = max_side / float(longest)
         gray = cv2.resize(gray, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
 
-    # Cheaper denoise than NLM for better latency on cloud free tiers.
+    # Keep this fast for first OCR pass.
     denoised = cv2.GaussianBlur(gray, (3, 3), 0)
     binary = cv2.adaptiveThreshold(
         denoised, 255,
@@ -201,6 +201,36 @@ def preprocess_image(img: np.ndarray) -> np.ndarray:
         blockSize=21, C=8
     )
     return binary
+
+
+def preprocess_image_detailed(img: np.ndarray) -> np.ndarray:
+    """Slower fallback path for hard photos."""
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    gray = cv2.resize(gray, None, fx=1.6, fy=1.6, interpolation=cv2.INTER_CUBIC)
+    denoised = cv2.fastNlMeansDenoising(gray, h=10)
+    binary = cv2.adaptiveThreshold(
+        denoised, 255,
+        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY,
+        blockSize=31, C=10
+    )
+    return binary
+
+
+def _extract_text_and_conf(data: dict) -> tuple[str, float]:
+    words, confidences = [], []
+    for i, word in enumerate(data.get("text", [])):
+        raw_conf = str(data.get("conf", ["-1"])[i]).strip()
+        try:
+            conf = int(float(raw_conf))
+        except ValueError:
+            conf = -1
+        if conf > 50 and word.strip():
+            words.append(word.strip())
+            confidences.append(conf)
+    text = " ".join(words)
+    avg_conf = round(sum(confidences) / len(confidences), 1) if confidences else 0.0
+    return text, avg_conf
 
 
 # ==============================
@@ -214,26 +244,30 @@ def ocr_image(image_path: str) -> tuple[str, float]:
     if img is None:
         raise ValueError("ไม่สามารถอ่านไฟล์ภาพได้ ไฟล์อาจเสียหาย")
 
-    processed = preprocess_image(img)
-
-    data = pytesseract.image_to_data(
-        processed,
+    # Pass 1: fast profile.
+    processed_fast = preprocess_image(img)
+    data_fast = pytesseract.image_to_data(
+        processed_fast,
         lang="tha+eng",
         config="--oem 1 --psm 6",
         output_type=pytesseract.Output.DICT
     )
+    text, avg_conf = _extract_text_and_conf(data_fast)
 
-    words, confidences = [], []
-    for i, word in enumerate(data["text"]):
-        conf = int(data["conf"][i])
-        if conf > 60 and word.strip():
-            words.append(word.strip())
-            confidences.append(conf)
+    # Pass 2: fallback for difficult photos.
+    if len(text) < 3 or avg_conf < 55:
+        processed_detailed = preprocess_image_detailed(img)
+        data_detailed = pytesseract.image_to_data(
+            processed_detailed,
+            lang="tha+eng",
+            config="--oem 1 --psm 11",
+            output_type=pytesseract.Output.DICT
+        )
+        text_2, conf_2 = _extract_text_and_conf(data_detailed)
+        if len(text_2) > len(text) or conf_2 > avg_conf:
+            text, avg_conf = text_2, conf_2
 
-    text = " ".join(words)
-    avg_conf = round(sum(confidences) / len(confidences), 1) if confidences else 0.0
     logger.info(f"[ocr] completed in {time.perf_counter() - started:.2f}s")
-
     return text, avg_conf
 
 
