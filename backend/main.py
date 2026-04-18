@@ -51,9 +51,19 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+allowed_origins_raw = os.getenv("ALLOWED_ORIGINS", "*").strip()
+allowed_origin_regex = os.getenv("ALLOWED_ORIGIN_REGEX", r"https://.*\.vercel\.app")
+
+if allowed_origins_raw == "*":
+    allowed_origins = ["*"]
+    allowed_origin_regex = None
+else:
+    allowed_origins = [o.strip() for o in allowed_origins_raw.split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[o.strip() for o in os.getenv("ALLOWED_ORIGINS", "*").split(",") if o.strip()],
+    allow_origins=allowed_origins,
+    allow_origin_regex=allowed_origin_regex,
     allow_methods=["*"],
     allow_headers=["*"],
 )
