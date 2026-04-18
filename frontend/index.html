@@ -383,6 +383,42 @@
        🔥 OCR UPLOAD (แก้แล้ว)
     ====================== */
     
+    async function downscaleImageFile(file, maxSide = 1600, quality = 0.82) {
+        if (!file || !file.type.startsWith("image/")) return file
+    
+        let bitmap
+        try {
+            bitmap = await createImageBitmap(file)
+        } catch {
+            return file
+        }
+    
+        let { width, height } = bitmap
+        const longest = Math.max(width, height)
+        if (longest <= maxSide) {
+            bitmap.close()
+            return file
+        }
+    
+        const scale = maxSide / longest
+        width = Math.max(1, Math.round(width * scale))
+        height = Math.max(1, Math.round(height * scale))
+    
+        const canvas = document.createElement("canvas")
+        canvas.width = width
+        canvas.height = height
+        const ctx = canvas.getContext("2d")
+        ctx.drawImage(bitmap, 0, 0, width, height)
+        bitmap.close()
+    
+        const blob = await new Promise((resolve) =>
+            canvas.toBlob((b) => resolve(b), "image/jpeg", quality)
+        )
+    
+        if (!blob) return file
+        return new File([blob], "upload.jpg", { type: "image/jpeg" })
+    }
+    
     function uploadImage() {
         document.getElementById("imgInput").click()
     }
@@ -391,6 +427,8 @@
     
         let file = e.target.files[0]
         if (!file) return
+    
+        file = await downscaleImageFile(file)
     
         let formData = new FormData()
         formData.append("file", file)

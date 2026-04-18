@@ -1,6 +1,7 @@
 import cv2
 import logging
 import numpy as np
+from PIL import Image, ImageOps
 import pytesseract
 import tempfile
 import os
@@ -182,42 +183,67 @@ def search(query_request: QueryRequest):
 # OCR Preprocessing
 # ==============================
 
-def preprocess_image(img: np.ndarray) -> np.ndarray:
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    # Keep OCR responsive by capping large images before processing.
-    max_side = 1400
+def load_bgr_image(image_path: str) -> np.ndarray:
+    """Load image with EXIF orientation applied (common mobile camera issue)."""
+    with Image.open(image_path) as pil_img:
+        pil_img = ImageOps.exif_transpose(pil_img)
+        pil_img = pil_img.convert("RGB")
+        rgb = np.array(pil_img)
+    return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+
+
+def _to_gray(img: np.ndarray) -> np.ndarray:
+    if img.ndim == 2:
+        return img
+    if img.shape[2] == 4:
+        img = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+    return cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+
+def _resize_longest(gray: np.ndarray, max_side: int) -> np.ndarray:
     h, w = gray.shape[:2]
     longest = max(h, w)
-    if longest > max_side:
-        scale = max_side / float(longest)
-        gray = cv2.resize(gray, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+    if longest <= max_side:
+        return gray
+    scale = max_side / float(longest)
+    return cv2.resize(gray, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
 
-    # Keep this fast for first OCR pass.
-    denoised = cv2.GaussianBlur(gray, (3, 3), 0)
-    binary = cv2.adaptiveThreshold(
-        denoised, 255,
+
+def preprocess_fast(gray: np.ndarray) -> np.ndarray:
+    gray = _resize_longest(gray, 1400)
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    eq = clahe.apply(gray)
+    blur = cv2.GaussianBlur(eq, (3, 3), 0)
+    return cv2.adaptiveThreshold(
+        blur, 255,
         cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
         cv2.THRESH_BINARY,
         blockSize=21, C=8
     )
+
+
+def preprocess_otsu(gray: np.ndarray) -> np.ndarray:
+    gray = _resize_longest(gray, 1600)
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    eq = clahe.apply(gray)
+    blur = cv2.GaussianBlur(eq, (3, 3), 0)
+    _, binary = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     return binary
 
 
-def preprocess_image_detailed(img: np.ndarray) -> np.ndarray:
-    """Slower fallback path for hard photos."""
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    gray = cv2.resize(gray, None, fx=1.6, fy=1.6, interpolation=cv2.INTER_CUBIC)
+def preprocess_detailed(gray: np.ndarray) -> np.ndarray:
+    gray = _resize_longest(gray, 1800)
+    gray = cv2.resize(gray, None, fx=1.35, fy=1.35, interpolation=cv2.INTER_CUBIC)
     denoised = cv2.fastNlMeansDenoising(gray, h=10)
-    binary = cv2.adaptiveThreshold(
+    return cv2.adaptiveThreshold(
         denoised, 255,
         cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
         cv2.THRESH_BINARY,
         blockSize=31, C=10
     )
-    return binary
 
 
-def _extract_text_and_conf(data: dict) -> tuple[str, float]:
+def _extract_text_and_conf(data: dict, min_conf: int = 35) -> tuple[str, float]:
     words, confidences = [], []
     for i, word in enumerate(data.get("text", [])):
         raw_conf = str(data.get("conf", ["-1"])[i]).strip()
@@ -225,12 +251,53 @@ def _extract_text_and_conf(data: dict) -> tuple[str, float]:
             conf = int(float(raw_conf))
         except ValueError:
             conf = -1
-        if conf > 50 and word.strip():
+        if conf >= min_conf and word.strip():
             words.append(word.strip())
             confidences.append(conf)
     text = " ".join(words)
     avg_conf = round(sum(confidences) / len(confidences), 1) if confidences else 0.0
     return text, avg_conf
+
+
+def _run_ocr_variants(img_bgr: np.ndarray) -> tuple[str, float]:
+    gray = _to_gray(img_bgr)
+
+    candidates: list[tuple[str, float]] = []
+
+    def add_candidate(processed: np.ndarray, psm: int) -> None:
+        data = pytesseract.image_to_data(
+            processed,
+            lang="tha+eng",
+            config=f"--oem 1 --psm {psm}",
+            output_type=pytesseract.Output.DICT
+        )
+        text, conf = _extract_text_and_conf(data)
+        if text.strip():
+            candidates.append((text.strip(), conf))
+
+    # Fast passes (cheap)
+    fast = preprocess_fast(gray)
+    add_candidate(fast, 6)
+    add_candidate(fast, 7)
+
+    otsu = preprocess_otsu(gray)
+    add_candidate(otsu, 6)
+    add_candidate(otsu, 11)
+
+    # Detailed pass (expensive) only if still weak
+    best_text, best_conf = ("", 0.0)
+    if candidates:
+        best_text, best_conf = max(candidates, key=lambda x: (len(x[0]), x[1]))
+
+    if len(best_text) < 3 or best_conf < 55:
+        detailed = preprocess_detailed(gray)
+        add_candidate(detailed, 11)
+        add_candidate(detailed, 12)
+
+    if not candidates:
+        return "", 0.0
+
+    return max(candidates, key=lambda x: (len(x[0]), x[1]))
 
 
 # ==============================
@@ -239,33 +306,15 @@ def _extract_text_and_conf(data: dict) -> tuple[str, float]:
 
 def ocr_image(image_path: str) -> tuple[str, float]:
     started = time.perf_counter()
-    img = cv2.imread(image_path)
+    try:
+        img = load_bgr_image(image_path)
+    except Exception:
+        img = cv2.imread(image_path)
 
     if img is None:
         raise ValueError("ไม่สามารถอ่านไฟล์ภาพได้ ไฟล์อาจเสียหาย")
 
-    # Pass 1: fast profile.
-    processed_fast = preprocess_image(img)
-    data_fast = pytesseract.image_to_data(
-        processed_fast,
-        lang="tha+eng",
-        config="--oem 1 --psm 6",
-        output_type=pytesseract.Output.DICT
-    )
-    text, avg_conf = _extract_text_and_conf(data_fast)
-
-    # Pass 2: fallback for difficult photos.
-    if len(text) < 3 or avg_conf < 55:
-        processed_detailed = preprocess_image_detailed(img)
-        data_detailed = pytesseract.image_to_data(
-            processed_detailed,
-            lang="tha+eng",
-            config="--oem 1 --psm 11",
-            output_type=pytesseract.Output.DICT
-        )
-        text_2, conf_2 = _extract_text_and_conf(data_detailed)
-        if len(text_2) > len(text) or conf_2 > avg_conf:
-            text, avg_conf = text_2, conf_2
+    text, avg_conf = _run_ocr_variants(img)
 
     logger.info(f"[ocr] completed in {time.perf_counter() - started:.2f}s")
     return text, avg_conf
