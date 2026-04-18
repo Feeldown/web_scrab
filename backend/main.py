@@ -4,6 +4,7 @@ import numpy as np
 import pytesseract
 import tempfile
 import os
+import time
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -183,13 +184,21 @@ def search(query_request: QueryRequest):
 
 def preprocess_image(img: np.ndarray) -> np.ndarray:
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    gray = cv2.resize(gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
-    denoised = cv2.fastNlMeansDenoising(gray, h=10)
+    # Keep OCR responsive by capping large images before processing.
+    max_side = 1400
+    h, w = gray.shape[:2]
+    longest = max(h, w)
+    if longest > max_side:
+        scale = max_side / float(longest)
+        gray = cv2.resize(gray, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+
+    # Cheaper denoise than NLM for better latency on cloud free tiers.
+    denoised = cv2.GaussianBlur(gray, (3, 3), 0)
     binary = cv2.adaptiveThreshold(
         denoised, 255,
         cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
         cv2.THRESH_BINARY,
-        blockSize=31, C=10
+        blockSize=21, C=8
     )
     return binary
 
@@ -199,6 +208,7 @@ def preprocess_image(img: np.ndarray) -> np.ndarray:
 # ==============================
 
 def ocr_image(image_path: str) -> tuple[str, float]:
+    started = time.perf_counter()
     img = cv2.imread(image_path)
 
     if img is None:
@@ -209,7 +219,7 @@ def ocr_image(image_path: str) -> tuple[str, float]:
     data = pytesseract.image_to_data(
         processed,
         lang="tha+eng",
-        config="--psm 11",
+        config="--oem 1 --psm 6",
         output_type=pytesseract.Output.DICT
     )
 
@@ -222,6 +232,7 @@ def ocr_image(image_path: str) -> tuple[str, float]:
 
     text = " ".join(words)
     avg_conf = round(sum(confidences) / len(confidences), 1) if confidences else 0.0
+    logger.info(f"[ocr] completed in {time.perf_counter() - started:.2f}s")
 
     return text, avg_conf
 
